@@ -194,7 +194,7 @@ ok "$PREFIX/bin/qishui"
 step "设置权限"
 chmod 755 "$PROJ/app"/*.py 2>/dev/null
 chmod 644 "$PROJ/app/index.html" 2>/dev/null
-chmod 755 "$PROJ/install.sh" 2>/dev/null
+chmod 755 "$PROJ/install.sh" "$PROJ/uninstall.sh" 2>/dev/null
 ok "完成"
 
 # ---------- 启动 ----------

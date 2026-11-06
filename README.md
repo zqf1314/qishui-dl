@@ -60,8 +60,24 @@ qishui logs        # 看服务日志
 qishui open        # 浏览器打开
 qishui doctor      # 环境自检
 qishui update      # git pull 后重启
-qishui uninstall   # 停止并移除命令
+qishui uninstall   # 彻底卸载：停服务、删命令、删项目、清副本
 ```
+
+## 卸载
+
+一条命令清干净：
+
+```bash
+qishui uninstall
+```
+
+会依次：停止服务 → 删 `$PREFIX/bin/qishui` → 用 `su -c` 清掉 `/data/local/tmp/qishui_db` → 删除整个 `~/qishui-dl`（脚本和日志一起没了）。默认会问一次确认，`-y` 跳过：
+
+```bash
+bash ~/qishui-dl/uninstall.sh -y
+```
+
+卸载完手机上不留任何残留；想再装回，从上面的「安装」重新开始。
 
 ## 服务生命周期
 
@@ -101,6 +117,7 @@ qishui uninstall   # 停止并移除命令
 ```
 qishui-dl/
   install.sh        安装脚本
+  uninstall.sh      彻底卸载脚本
   qishui            管理命令
   config.env        安装后生成（模式、地址、端口）
   app/
@@ -121,13 +138,6 @@ qishui-dl/
 - 无损只对“本机 App 播过、且音质标签为无损”的歌有效。没播过的会自动补抓，但受版权、会员、地区限制影响。
 - 精简版只有 128k，换设备、换网络都能用。
 - 128k 直链有时效，服务端做代理下载，点下载时实时拉取。
-
-## 卸载
-
-```bash
-qishui uninstall
-rm -rf ~/qishui-dl
-```
 
 ## License
 

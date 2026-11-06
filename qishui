@@ -214,11 +214,15 @@ do_update() {
 }
 
 do_uninstall() {
-  do_stop
-  rm -f "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui" 2>/dev/null
-  ok "服务已停止，qishui 命令已移除"
-  say "项目目录还在：$PROJ"
-  say "要彻底删除：rm -rf '$PROJ'"
+  if [ -f "$PROJ/uninstall.sh" ]; then
+    bash "$PROJ/uninstall.sh" "$@"
+  else
+    do_stop
+    rm -f "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui" 2>/dev/null
+    ok "服务已停止，qishui 命令已移除"
+    say "项目目录还在：$PROJ"
+    say "要彻底删除：rm -rf '$PROJ'"
+  fi
 }
 
 usage() {
@@ -234,7 +238,7 @@ ${c_b}qishui${c_0} —— 汽水音乐下载器
   qishui open       浏览器打开
   qishui doctor     环境自检
   qishui update     git pull 后重启
-  qishui uninstall  停止并移除命令
+  qishui uninstall  彻底卸载（停服务、删命令、删项目、清副本；-y 跳过确认）
   qishui help       本帮助
 
 当前  $([ "$MODE" = "2" ] && echo '完整版（128k + 无损）' || echo '精简版（仅 128k）') · http://$HOST:$PORT/
