@@ -1,0 +1,9 @@
+config.env
+data/db/
+data/req/
+data/run/
+logs/
+__pycache__/
+*.pyc
+*.log
+*.pid

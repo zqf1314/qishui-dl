@@ -1,0 +1,260 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# qishui —— 汽水音乐下载器 服务管理命令
+# install.sh 会把它安装到 $PREFIX/bin/qishui
+set -u
+
+PROJ="${QISHUI_HOME:-@@PROJ@@}"
+CONF="$PROJ/config.env"
+[ -f "$CONF" ] && . "$CONF"
+
+RUN="$PROJ/data/run"
+LOGD="$PROJ/logs"
+HOST="${QISHUI_HOST:-127.0.0.1}"
+PORT="${QISHUI_PORT:-1314}"
+MODE="${QISHUI_MODE:-1}"
+DBDIR="${QISHUI_DB_DIR:-/data/local/tmp/qishui_db}"
+mkdir -p "$RUN" "$LOGD" 2>/dev/null
+
+c_g=$'\033[32m'; c_r=$'\033[31m'; c_y=$'\033[33m'; c_d=$'\033[2m'; c_b=$'\033[1m'; c_0=$'\033[0m'
+ok()   { printf '%s✓%s %s\n' "$c_g" "$c_0" "$*"; }
+warn() { printf '%s!%s %s\n' "$c_y" "$c_0" "$*"; }
+err()  { printf '%s✗%s %s\n' "$c_r" "$c_0" "$*"; }
+say()  { printf '%s\n' "$*"; }
+
+alive() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+pid_of() { cat "$1" 2>/dev/null; }
+
+port_open() {
+  if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$PORT\$"; then
+    return 0
+  fi
+  curl -s -o /dev/null -m 1 "http://$HOST:$PORT/" 2>/dev/null
+}
+
+port_holder() {
+  netstat -ltnp 2>/dev/null | grep -E "[:.]$PORT[[:space:]]" \
+    | awk '{print $NF}' | sed 's|/.*||' | grep -E '^[0-9]+$' | head -1
+}
+
+# 顺着父链找 Termux 主进程：Termux 里看不到别人的 /proc，只能走自己的父链
+termux_pid() {
+  local p="${1:-$PPID}" c i=0
+  while [ -n "${p:-}" ] && [ "$p" != "0" ] && [ "$p" != "1" ] && [ "$i" -lt 16 ]; do
+    c=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+    case "$c" in com.termux*) echo "$p"; return 0 ;; esac
+    p=$(awk '/^PPid:/{print $2}' "/proc/$p/status" 2>/dev/null)
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# ---------- 启动 ----------
+do_start() {
+  if alive "$RUN/server.pid"; then
+    ok "服务已在运行 (PID $(pid_of "$RUN/server.pid"))"
+    say "  http://$HOST:$PORT/"
+    return 0
+  fi
+
+  if port_open; then
+    local h; h=$(port_holder)
+    err "端口 $PORT 已被占用${h:+ (PID $h)}，先停掉它再启动"
+    return 1
+  fi
+
+  command -v python3 >/dev/null 2>&1 || { err "缺 python3"; say "  pkg install python"; return 1; }
+
+  cd "$PROJ/app" || { err "程序目录缺失：$PROJ/app"; return 1; }
+  export QISHUI_HOST="$HOST" QISHUI_PORT="$PORT"
+  export QISHUI_EXIT_WITH_TERMUX=1
+  [ "$MODE" = "2" ] && export LUNA_DB_DIR="$DBDIR"
+
+  local TPID
+  TPID=$(termux_pid) && export QISHUI_TERMUX_PID="$TPID"
+
+  # 故意不 nohup、不 setsid：进程留在 Termux 的会话里，
+  # Termux 一结束就跟着结束，不留后台残党。
+  python3 -u server.py --host "$HOST" --port "$PORT" --exit-with-termux \
+      >> "$LOGD/server.log" 2>&1 &
+  echo $! > "$RUN/server.pid"
+
+  local i
+  for i in $(seq 1 40); do
+    sleep 0.2
+    if port_open; then
+      ok "服务已启动 (PID $(pid_of "$RUN/server.pid"))"
+      say "  打开  http://$HOST:$PORT/"
+      return 0
+    fi
+    if ! alive "$RUN/server.pid"; then
+      err "启动失败，日志末尾："
+      tail -n 15 "$LOGD/server.log" 2>/dev/null
+      rm -f "$RUN/server.pid"
+      return 1
+    fi
+  done
+  warn "进程在，但端口还没通；qishui logs 看原因"
+  return 1
+}
+
+# ---------- 停止 ----------
+do_stop() {
+  local p i stopped=0
+  p=$(pid_of "$RUN/server.pid")
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+    kill "$p" 2>/dev/null; stopped=1
+    for i in $(seq 1 20); do kill -0 "$p" 2>/dev/null || break; sleep 0.15; done
+    kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null
+  fi
+  rm -f "$RUN/server.pid"
+
+  if port_open; then
+    local h; h=$(port_holder)
+    if [ -n "${h:-}" ]; then
+      kill "$h" 2>/dev/null; sleep 0.3; kill -9 "$h" 2>/dev/null; stopped=1
+    fi
+  fi
+
+  if [ "$stopped" = "1" ]; then ok "已停止"; else warn "本来就没在运行"; fi
+}
+
+# ---------- 前台 ----------
+do_run() {
+  port_open && { err "端口 $PORT 已被占用"; return 1; }
+  cd "$PROJ/app" || return 1
+  export QISHUI_HOST="$HOST" QISHUI_PORT="$PORT" QISHUI_EXIT_WITH_TERMUX=1
+  [ "$MODE" = "2" ] && export LUNA_DB_DIR="$DBDIR"
+  local TPID
+  TPID=$(termux_pid) && export QISHUI_TERMUX_PID="$TPID"
+  say "前台运行，Ctrl+C 结束。地址 http://$HOST:$PORT/"
+  exec python3 -u server.py --host "$HOST" --port "$PORT" --exit-with-termux
+}
+
+# ---------- 状态 ----------
+do_status() {
+  say "项目      $PROJ"
+  say "模式      $([ "$MODE" = "2" ] && echo '完整版（128k + 无损）' || echo '精简版（仅 128k）')"
+  say "地址      http://$HOST:$PORT/"
+  if alive "$RUN/server.pid"; then
+    printf '服务      %s运行中%s (PID %s)\n' "$c_g" "$c_0" "$(pid_of "$RUN/server.pid")"
+  else
+    printf '服务      %s未运行%s\n' "$c_d" "$c_0"
+  fi
+  if [ "$MODE" = "2" ]; then
+    if [ -d "$DBDIR" ]; then
+      local cnt
+      cnt=$(ls "$DBDIR"/player_*.db 2>/dev/null | wc -l)
+      if [ "$cnt" -gt 0 ]; then
+        ok "无损数据   $cnt 个数据库副本（$DBDIR）"
+      else
+        warn "无损数据   目录在，但还没同步到数据库（打开一次网页即会触发）"
+      fi
+    else
+      warn "无损数据   还没同步过（首次解析或下载时自动同步）"
+    fi
+  fi
+  if port_open; then
+    say "自检      HTTP $(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://$HOST:$PORT/" 2>/dev/null)"
+  fi
+}
+
+# ---------- 其它 ----------
+do_logs() {
+  local which="${1:-server}" n="${2:-40}" f
+  f="$LOGD/server.log"
+  [ -f "$f" ] || { err "还没有日志，先 qishui start"; return 1; }
+  tail -n "$n" -f "$f"
+}
+
+do_open() {
+  alive "$RUN/server.pid" || warn "服务没在运行，先执行 qishui start"
+  if command -v termux-open-url >/dev/null 2>&1; then
+    termux-open-url "http://$HOST:$PORT/"
+  else
+    am start -a android.intent.action.VIEW -d "http://$HOST:$PORT/" >/dev/null 2>&1 \
+      || say "手动打开 http://$HOST:$PORT/"
+  fi
+}
+
+do_doctor() {
+  say "—— 环境检查 ——"
+  [ -n "${PREFIX:-}" ] && ok "Termux ($PREFIX)" || err "不在 Termux 环境"
+  command -v python3 >/dev/null 2>&1 && ok "python3 $(python3 -V 2>&1 | awk '{print $2}')" || err "缺 python3：pkg install python"
+  [ -f "$PROJ/app/server.py" ] && ok "程序文件完整" || err "程序文件缺失，重新安装"
+
+  if [ "$MODE" = "2" ]; then
+    command -v ffmpeg >/dev/null 2>&1 && ok "ffmpeg 已安装" || err "缺 ffmpeg：pkg install ffmpeg"
+    if su -c id >/dev/null 2>&1; then
+      ok "root 可用（按需临时 su，不留常驻进程）"
+    else
+      err "root 不可用"
+    fi
+    if [ "$(su -c 'ls /data_mirror/data_ce/null/0/com.luna.music/databases /data/data/com.luna.music/databases /data/user/0/com.luna.music/databases 2>/dev/null | grep -c "player_.*\.db$"' 2>/dev/null)" -gt 0 ]; then
+      ok "汽水音乐数据库可读"
+    else
+      warn "没找到汽水音乐的数据库，确认已安装并播过歌"
+    fi
+    local n
+    n=$(ls "$DBDIR"/player_*.db 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] && ok "已同步 $n 个数据库副本" || warn "还没同步数据库副本"
+  fi
+
+  if port_open; then warn "端口 $PORT 已被占用"; else ok "端口 $PORT 空闲"; fi
+  command -v git >/dev/null 2>&1 && ok "git 已安装" || warn "没装 git，qishui update 用不了"
+}
+
+do_update() {
+  [ -d "$PROJ/.git" ] || { err "这不是 git 仓库，只能手动覆盖文件"; return 1; }
+  ( cd "$PROJ" && git pull --ff-only ) || { err "git pull 失败"; return 1; }
+  sed -e "s|@@PROJ@@|$PROJ|g" "$PROJ/qishui" > "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui.tmp" 2>/dev/null \
+    && chmod 755 "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui.tmp" \
+    && mv -f "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui.tmp" "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui"
+  ok "已更新"
+  do_stop; sleep 0.5; do_start
+}
+
+do_uninstall() {
+  do_stop
+  rm -f "${PREFIX:-/data/data/com.termux/files/usr}/bin/qishui" 2>/dev/null
+  ok "服务已停止，qishui 命令已移除"
+  say "项目目录还在：$PROJ"
+  say "要彻底删除：rm -rf '$PROJ'"
+}
+
+usage() {
+  cat <<EOF
+${c_b}qishui${c_0} —— 汽水音乐下载器
+
+  qishui start      启动服务（后台）
+  qishui stop       停止服务
+  qishui restart    重启
+  qishui run        前台运行，看实时输出，Ctrl+C 结束
+  qishui status     运行状态
+  qishui logs       看服务日志
+  qishui open       浏览器打开
+  qishui doctor     环境自检
+  qishui update     git pull 后重启
+  qishui uninstall  停止并移除命令
+  qishui help       本帮助
+
+当前  $([ "$MODE" = "2" ] && echo '完整版（128k + 无损）' || echo '精简版（仅 128k）') · http://$HOST:$PORT/
+${c_d}服务随 Termux 生命周期：Termux 结束，服务自动结束。
+无损数据按需临时 su 取一份，不留常驻 root 进程。${c_0}
+EOF
+}
+
+case "${1:-help}" in
+  start)     do_start ;;
+  stop)      do_stop ;;
+  restart)   do_stop; sleep 0.4; do_start ;;
+  run|fg)    do_run ;;
+  status)    do_status ;;
+  logs)      do_logs "${2:-server}" "${3:-40}" ;;
+  open)      do_open ;;
+  doctor)    do_doctor ;;
+  path)      say "$PROJ" ;;
+  update|upgrade) do_update ;;
+  uninstall) do_uninstall ;;
+  help|-h|--help) usage ;;
+  *) err "未知命令：$1"; echo; usage; exit 1 ;;
+esac
