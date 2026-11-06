@@ -184,7 +184,8 @@ $("#dlflac").onclick = async () => {
   const tick = setInterval(() => {
     const s = Math.round((Date.now() - t0) / 1000);
     hint(had ? ("正在生成无损… " + s + "s")
-             : ("本机还没这首歌，正在唤起 App 播放它来取无损… " + s + "s（最长 75 秒）"));
+             : ("本机还没这首歌，正在唤起 App 播放它来取无损… " + s + "s"
+                + (s > 80 ? "（App 响应慢，还在等，最多约 2 分钟）" : "（最长 75 秒）")));
   }, 500);
   try {
     const r = await fetch(last.lossless.download);

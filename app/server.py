@@ -64,7 +64,7 @@ def _su(cmd, timeout=60):
         return False
 
 
-def _sync_db(force=False, throttle=2.0):
+def _sync_db(force=False, throttle=2.0, su_timeout=15):
     """把汽水 App 的数据库拷一份到 /data/local/tmp，供本服务只读"""
     global _sync_last
     if not force and time.time() - _sync_last < throttle:
@@ -89,7 +89,7 @@ def _sync_db(force=False, throttle=2.0):
             "chmod 755 \"$DEST\" 2>/dev/null; "
             "chmod 644 \"$DEST\"/* 2>/dev/null; exit 0"
         ) % (DB_DIR, cands)
-        ok = _su(sh)
+        ok = _su(sh, timeout=su_timeout)
         _sync_last = time.time()
         return ok
 
@@ -128,20 +128,23 @@ def _best_lossless(vid, track_id):
 
 
 def _autofetch(vid, track_id, timeout=AUTO_WAIT):
-    """本机没记录时，让 App 播一遍，等 player_info 落库后再取无损"""
+    """本机没记录时，让 App 播一遍，等 player_info 落库后再取无损
+
+    timeout 是整个补抓阶段的总预算（含 su 调用），不是单纯轮询时长。
+    """
+    deadline = time.time() + timeout
     got = _best_lossless(vid, track_id)
     if got:
         return got
     if not _trigger_play(track_id):
         return None
-    t0 = time.time()
-    while time.time() - t0 < timeout:
+    while time.time() < deadline:
         time.sleep(2.0)
-        _sync_db(force=True)
+        _sync_db(force=True, su_timeout=10)
         got = _best_lossless(vid, track_id)
         if got:
             return got
-    return None
+    return _best_lossless(vid, track_id)
 
 
 class H(BaseHTTPRequestHandler):
@@ -229,7 +232,7 @@ class H(BaseHTTPRequestHandler):
             tid = (q.get("track_id") or [""])[0]
             name = safe_name((q.get("name") or ["audio"])[0])
             auto = (q.get("auto") or [""])[0] in ("1", "true", "yes")
-            _sync_db()
+            _sync_db(su_timeout=10)
             got = _best_lossless(vid, tid)
             if not got and auto and tid:
                 got = _autofetch(vid, tid)
